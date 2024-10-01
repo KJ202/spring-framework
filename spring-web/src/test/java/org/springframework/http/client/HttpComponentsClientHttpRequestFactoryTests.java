@@ -19,6 +19,7 @@ package org.springframework.http.client;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.stream.Stream;
 
 import org.apache.hc.client5.http.classic.HttpClient;
@@ -35,12 +36,15 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.util.FileCopyUtils;
+import org.springframework.web.client.RestTemplate;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.Assert.assertThrows;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.withSettings;
+import static org.wildfly.common.Assert.assertTrue;
 
 /**
  * @author Stephane Nicoll
@@ -185,6 +189,36 @@ class HttpComponentsClientHttpRequestFactoryTests extends AbstractHttpRequestFac
 			String result = FileCopyUtils.copyToString(new InputStreamReader(response.getBody()));
 			assertThat(result).as("Invalid body").isEqualTo("Content-Length:null");
 		}
+	}
+
+	@Test
+	public void testAwsMetadataIpBlocked() throws Exception {
+		List<String> bannedIps = List.of("169.254.169.254", "127.0.0.1");
+		SsrfProtectionConfig ssrfConfig = new SsrfProtectionConfig(bannedIps);
+		ssrfConfig.setAllowInternalIp(false);
+		HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory();
+		factory.setSsrfProtectionConfig(ssrfConfig);
+		String awsMetadataIp = "http://169.254.169.254";
+		ClientHttpRequest request = factory.createRequest(URI.create(awsMetadataIp), HttpMethod.GET);
+
+		Exception exception = assertThrows(Exception.class, request::execute);
+
+		assertTrue(exception.getMessage().contains("Blocked access to IP"));
+	}
+
+	@Test
+	public void testInternalIpBlocked() throws Exception {
+		List<String> bannedIps = List.of("169.254.169.254", "127.0.0.1");
+		SsrfProtectionConfig ssrfConfig = new SsrfProtectionConfig(bannedIps);
+		ssrfConfig.setAllowInternalIp(false);
+		HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory();
+		factory.setSsrfProtectionConfig(ssrfConfig);
+		String internalIp = "http://10.1.23.45";
+		ClientHttpRequest request = factory.createRequest(URI.create(internalIp), HttpMethod.GET);
+
+		Exception exception = assertThrows(Exception.class, request::execute);
+
+		assertTrue(exception.getMessage().contains("Blocked access to internal IP"));
 	}
 
 	static Stream<HttpMethod> safeHttpMethods() {

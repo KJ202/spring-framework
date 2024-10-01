@@ -18,7 +18,9 @@ package org.springframework.http.client;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
@@ -35,12 +37,22 @@ import org.apache.hc.client5.http.classic.methods.HttpTrace;
 import org.apache.hc.client5.http.config.Configurable;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.io.BasicHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.io.HttpClientConnectionManager;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
+import org.apache.hc.client5.http.socket.ConnectionSocketFactory;
+import org.apache.hc.client5.http.socket.PlainConnectionSocketFactory;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
 import org.apache.hc.core5.http.ClassicHttpRequest;
+import org.apache.hc.core5.http.config.Registry;
+import org.apache.hc.core5.http.config.RegistryBuilder;
 import org.apache.hc.core5.http.io.SocketConfig;
 import org.apache.hc.core5.http.protocol.HttpContext;
 
+import org.apache.hc.client5.http.DnsResolver;
+import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.http.HttpMethod;
 import org.springframework.lang.Nullable;
@@ -71,16 +83,84 @@ public class HttpComponentsClientHttpRequestFactory implements ClientHttpRequest
 
 	private long connectTimeout = -1;
 
+	private SsrfProtectionConfig ssrfProtectionConfig = new SsrfProtectionConfig();
+
+	public void setSsrfProtectionConfig(SsrfProtectionConfig ssrfProtectionConfig) {
+		this.ssrfProtectionConfig = ssrfProtectionConfig;
+		this.httpClient = createHttpClient(ssrfProtectionConfig);
+	}
+
 	private long connectionRequestTimeout = -1;
 
 	private long readTimeout = -1;
+
+	// Custom DnsResolver to block IPs
+	private static class CustomDnsResolver implements DnsResolver {
+
+		private final SsrfProtectionConfig ssrfProtectionConfig;
+
+		public CustomDnsResolver(SsrfProtectionConfig ssrfProtectionConfig) {
+			this.ssrfProtectionConfig = ssrfProtectionConfig;
+		}
+
+		@Override
+		public InetAddress[] resolve(final String host) throws UnknownHostException {
+			if (this.ssrfProtectionConfig.getBannedIps().contains(host)) {
+				throw new UnknownHostException("Blocked access to IP: " + host);
+			}
+
+			if (!this.ssrfProtectionConfig.isAllowInternalIp() && isInternalIp(host)) {
+				throw new UnknownHostException("Blocked access to internal IP: " + host);
+			}
+
+			if (!this.ssrfProtectionConfig.isAllowExternalIp() && !isInternalIp(host)) {
+				throw new UnknownHostException("Blocked access to external IP: " + host);
+			}
+
+			// Default behavior: allow if not banned and no allow rules are set
+			return InetAddress.getAllByName(host);
+		}
+
+		private boolean isInternalIp(String host) {
+			// Implement your logic to determine if an IP is internal
+			// This is a simplified example, you might need more robust checks
+			return host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith(
+					"172.16.");
+		}
+
+		@Override
+		public String resolveCanonicalHostname(String host) throws UnknownHostException {
+			return host;
+		}
+	}
+
+	@SuppressWarnings("deprecation")
+	protected static CloseableHttpClient createHttpClient(
+			SsrfProtectionConfig ssrfProtectionConfig) {
+		DnsResolver dnsResolver = new CustomDnsResolver(ssrfProtectionConfig);
+
+		Registry<ConnectionSocketFactory> registry = RegistryBuilder.<ConnectionSocketFactory>create()
+				.register("http", PlainConnectionSocketFactory.getSocketFactory())
+				.register("https", SSLConnectionSocketFactory.getSocketFactory())
+				.build();
+
+		BasicHttpClientConnectionManager connManager = new BasicHttpClientConnectionManager(
+				registry, null, null, dnsResolver);
+
+		CloseableHttpClient httpClient = HttpClientBuilder.create()
+				.setConnectionManager(connManager)
+				.build();
+
+		return httpClient;
+	}
+
 
 	/**
 	 * Create a new instance of the {@code HttpComponentsClientHttpRequestFactory}
 	 * with a default {@link HttpClient} based on system properties.
 	 */
 	public HttpComponentsClientHttpRequestFactory() {
-		this.httpClient = HttpClients.createSystem();
+		this.httpClient = HttpClients.createSystem(); // Pass config here;
 	}
 
 	/**
@@ -154,6 +234,8 @@ public class HttpComponentsClientHttpRequestFactory implements ClientHttpRequest
 	 * A timeout value of 0 specifies an infinite timeout.
 	 * <p>Additional properties can be configured by specifying a
 	 * {@link RequestConfig} instance on a custom {@link HttpClient}.
+	 *
+	 * @param connectionRequestTimeout the timeout value to request a connection in milliseconds
 	 * @param connectionRequestTimeout the timeout value to request a connection
 	 * in milliseconds
 	 * @see RequestConfig#getConnectionRequestTimeout()
@@ -169,6 +251,8 @@ public class HttpComponentsClientHttpRequestFactory implements ClientHttpRequest
 	 * A timeout value of 0 specifies an infinite timeout.
 	 * <p>Additional properties can be configured by specifying a
 	 * {@link RequestConfig} instance on a custom {@link HttpClient}.
+	 *
+	 * @param connectionRequestTimeout the timeout value to request a connection in milliseconds
 	 * @param connectionRequestTimeout the timeout value to request a connection
 	 * as a {@code Duration}.
 	 * @since 6.1
