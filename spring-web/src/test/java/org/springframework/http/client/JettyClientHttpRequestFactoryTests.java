@@ -16,7 +16,10 @@
 
 package org.springframework.http.client;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.springframework.http.HttpMethod;
 
@@ -35,6 +38,19 @@ class JettyClientHttpRequestFactoryTests extends AbstractHttpRequestFactoryTests
 	void httpMethods() throws Exception {
 		super.httpMethods();
 		assertHttpMethod("patch", HttpMethod.PATCH);
+	}
+
+	@Test
+	void testBlockedIpAddress() throws URISyntaxException {
+		// Set up the factory and URI with the blocked IP
+		ClientHttpRequestFactory requestFactory = createRequestFactory();
+		URI blockedUri = new URI("http://192.168.1.100:80");
+
+		// Verify that attempting to create a request with the blocked IP throws a SecurityException
+		assertThrows(SecurityException.class, () -> {
+			ClientHttpRequest request = requestFactory.createRequest(blockedUri, HttpMethod.GET);
+			request.execute();  // This should throw due to the blocked IP
+		});
 	}
 
 }

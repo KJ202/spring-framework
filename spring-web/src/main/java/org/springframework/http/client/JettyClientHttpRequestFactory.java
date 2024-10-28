@@ -17,11 +17,18 @@
 package org.springframework.http.client;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URI;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jetty.client.HttpClient;
+import java.util.concurrent.CompletableFuture;
+import org.eclipse.jetty.util.Promise;
+import org.eclipse.jetty.util.SocketAddressResolver;
+import java.net.InetSocketAddress;
 import org.eclipse.jetty.client.Request;
 
 import org.springframework.beans.factory.DisposableBean;
@@ -63,6 +70,37 @@ public class JettyClientHttpRequestFactory implements ClientHttpRequestFactory, 
 	private JettyClientHttpRequestFactory(HttpClient httpClient, boolean defaultClient) {
 		this.httpClient = httpClient;
 		this.defaultClient = defaultClient;
+
+		// Set custom DNS resolver
+		this.httpClient.setSocketAddressResolver(new CustomSocketAddressResolver());
+	}
+
+	// Define your custom resolver
+	private static class CustomSocketAddressResolver implements SocketAddressResolver {
+		@Override
+		public void resolve(String host, int port, Promise<List<InetSocketAddress>> promise) {
+			// Use a separate thread for async DNS resolution
+			new Thread(() -> {
+				try {
+					InetAddress inetAddress = InetAddress.getByName(host);
+
+					// Check if the IP address matches the blocked IP (e.g., 192.168.1.100)
+					if (inetAddress.getHostAddress().equals("192.168.1.100")) {
+						promise.failed(new SecurityException("Blocked IP address: " + inetAddress));
+						return;
+					}
+
+					// Custom DNS resolution logic
+					InetSocketAddress address = new InetSocketAddress(host, port);
+
+					// Signal success with the resolved address
+					promise.succeeded(Collections.singletonList(address));
+				} catch (Exception e) {
+					// Signal failure with the exception if DNS resolution fails
+					promise.failed(e);
+				}
+			}).start();
+		}
 	}
 
 
